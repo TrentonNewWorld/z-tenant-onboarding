@@ -1,0 +1,88 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The decision logic is deliberately free of host imports so it can be tested
+  # on an ordinary toolchain. This job is the one that fails a bad rule change.
+  test:
+    name: unit tests (host target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: formatting
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --lib --all-features -- -D warnings
+      - name: tests
+        run: cargo test --lib -- --nocapture
+
+  # Proves the crate really emits a WASM *component* for the cluster's target,
+  # not just that it type-checks.
+  component:
+    name: build wasm component
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+      - name: build
+        run: cargo build --target wasm32-wasip2 --release
+
+      - name: verify the artifact is a component and not a bare module
+        run: |
+          set -euo pipefail
+          WASM=target/wasm32-wasip2/release/z_tenant_onboarding.wasm
+          test -f "$WASM" || { echo "::error::$WASM was not produced"; exit 1; }
+          SIZE=$(stat -c%s "$WASM")
+          echo "artifact: $WASM ($SIZE bytes)"
+          # WASM components carry layer 1 in the 8-byte header; core modules carry 0.
+          LAYER=$(head -c 8 "$WASM" | od -An -tu1 | awk '{print $7}')
+          if [ "$LAYER" != "1" ]; then
+            echo "::error::not a component (header layer $LAYER) - check crate-type = cdylib"
+            exit 1
+          fi
+          echo "confirmed: WASM component (layer 1)"
+
+      - name: confirm the capability set matches world.wit
+        run: |
+          set -euo pipefail
+          cargo install wasm-tools --locked --version 1.* >/dev/null 2>&1 || cargo install wasm-tools --locked
+          WASM=target/wasm32-wasip2/release/z_tenant_onboarding.wasm
+          wasm-tools component wit "$WASM" > /tmp/actual.wit
+          cat /tmp/actual.wit
+          # The security claim of this contract is that it CANNOT make a plain
+          # HTTP call, because it never imports the capability. Assert it, so a
+          # careless import in a later commit fails the build rather than
+          # silently widening the contract's reach.
+          if grep -qE 'import host:interfaces/http@' /tmp/actual.wit; then
+            echo "::error::contract imports plain http - it must only use http-with-placeholders"
+            exit 1
+          fi
+          for required in \
+            'host:interfaces/http-with-placeholders' \
+            'host:interfaces/kv-store' \
+            'host:tenant/tenant-context'; do
+            grep -q "$required" /tmp/actual.wit || {
+              echo "::error::missing expected import $required"; exit 1; }
+          done
+          echo "confirmed: capability set is placeholders-only"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: z_tenant_onboarding.wasm
+          path: target/wasm32-wasip2/release/z_tenant_onboarding.wasm
+          if-no-files-found: error
