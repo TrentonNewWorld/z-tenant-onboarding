@@ -1,0 +1,69 @@
+/// z-tenant-onboarding — PII-safe counterparty screening for vendor and
+/// employee onboarding.
+///
+/// The problem this solves: sanctions / adverse-media screening is legally
+/// required before you onboard a vendor or an employee, and it is the one
+/// check that structurally cannot be done on anonymised data — the provider
+/// matches on the person's real name and date of birth. So every operator
+/// running it ends up with plaintext PII on their own infrastructure, inside
+/// their own logs, and inside their vendor's request history.
+///
+/// Here the contract never sees it. The screening request body carries
+/// `{{profile.<field>}}` markers; the host resolves them from the calling
+/// user's profile inside the enclave at dispatch time. What crosses back out
+/// of WASM is a decision and an audit row — never a name, never a DOB.
+///
+/// Imports (this list IS the capability set — there is no separate manifest):
+///   - tenant-context:         tenant DID, cluster timestamp, seq-no for audit
+///   - logging:                in-enclave operational lines (never PII)
+///   - kv-store:               secrets read + audit-trail write/scan
+///   - http-with-placeholders: the screening call, PII resolved host-side
+///
+/// Deliberately NOT imported: `host:interfaces/http`. A plain-HTTP capability
+/// would let this contract exfiltrate a resolved value; omitting it makes that
+/// impossible to express rather than merely against policy.
+package z:tenant-onboarding@0.1.0;
+
+world tenant-onboarding {
+    import host:tenant/tenant-context@1.0.0;
+    import host:interfaces/logging@2.1.0;
+    import host:interfaces/kv-store@2.1.0;
+    import host:interfaces/http-with-placeholders@2.1.0;
+
+    export contracts;
+}
+
+interface contracts {
+    /// Standard 3-field envelope used by all node-callable contracts.
+    /// `input`        — JSON request payload for this function.
+    /// `user-profile` — always None for tenant contracts; the profile is
+    ///                  resolved host-side during placeholder substitution.
+    /// `context`      — node-minted DynamicContext (trusted).
+    record generic-input {
+        input:        option<list<u8>>,
+        user-profile: option<list<u8>>,
+        context:      option<list<u8>>,
+    }
+
+    /// Screen the CALLING user against the configured provider and record the
+    /// outcome in the tenant audit map.
+    ///
+    /// Input  (JSON): { subject-ref, check-type?, score-threshold? }
+    ///   subject-ref  — YOUR opaque id for this counterparty (e.g. "vendor-8812").
+    ///                  Must not be an email, a name, or anything else personal;
+    ///                  it is rejected if it looks like one.
+    ///   check-type   — "sanctions" (default) | "adverse-media" | "pep"
+    /// Output (JSON): { subject-ref, decision, hit-count, checked-at, seq-no,
+    ///                  provider-ref } — contains no PII by construction.
+    run-check: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Read back a previously recorded decision. No outbound call, no PII.
+    /// Input  (JSON): { subject-ref }
+    /// Output (JSON): the stored audit record, or an error if never screened.
+    get-check: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Enumerate recorded decisions in key order, for a compliance export.
+    /// Input  (JSON): { start?, end?, limit? }   limit defaults to 100, max 1000
+    /// Output (JSON): { records: [...], truncated: bool, next-start? }
+    list-checks: func(req: generic-input) -> result<list<u8>, string>;
+}
