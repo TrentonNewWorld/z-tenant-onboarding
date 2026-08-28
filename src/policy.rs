@@ -297,7 +297,10 @@ mod tests {
 
     #[test]
     fn accepts_an_opaque_ref_and_trims_it() {
-        assert_eq!(validate_subject_ref("  vendor-8812 ").unwrap(), "vendor-8812");
+        assert_eq!(
+            validate_subject_ref("  vendor-8812 ").unwrap(),
+            "vendor-8812"
+        );
     }
 
     #[test]

@@ -30,15 +30,17 @@ fn describe(e: hwp::HttpError) -> String {
         hwp::HttpError::PlaceholderDenied(marker) => {
             format!("placeholder not permitted: {marker} (markers must be flat and snake_case)")
         }
-        hwp::HttpError::PlaceholderUnknown(field) => format!(
-            "the calling user's profile has no {field} - screening cannot run without it"
-        ),
+        hwp::HttpError::PlaceholderUnknown(field) => {
+            format!("the calling user's profile has no {field} - screening cannot run without it")
+        }
         hwp::HttpError::PlaceholderNoUserContext => {
             "no user context bound: run-check must be invoked through the Session API by the \
              user being screened, not via /api/dev/exec"
                 .to_string()
         }
-        hwp::HttpError::UpstreamError(reason) => format!("screening provider unreachable: {reason}"),
+        hwp::HttpError::UpstreamError(reason) => {
+            format!("screening provider unreachable: {reason}")
+        }
     }
 }
 
@@ -60,7 +62,8 @@ fn api_token() -> Result<String, String> {
                 String::from_utf8_lossy(policy::SECRET_KEY)
             )
         })?;
-    String::from_utf8(bytes).map_err(|_| "provider token in secrets map is not valid UTF-8".to_string())
+    String::from_utf8(bytes)
+        .map_err(|_| "provider token in secrets map is not valid UTF-8".to_string())
 }
 
 pub fn run_check(input: &[u8]) -> Result<Vec<u8>, String> {
